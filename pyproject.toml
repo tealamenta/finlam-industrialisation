@@ -66,7 +66,8 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.mypy]
-python_version = "3.10"
+# pas de python_version figé : mypy suit l'interpréteur (les stubs numpy >= 2.4 utilisent
+# la syntaxe `type X = ...` de 3.12, illisible en mode 3.10)
 packages = ["finlam_prod"]
 mypy_path = "src"
 ignore_missing_imports = true

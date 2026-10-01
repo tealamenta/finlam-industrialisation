@@ -14,6 +14,7 @@ Matplotlib est importé à l'appel : le paquet n'en dépend pas.
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -91,12 +92,18 @@ def plot_metric_by(
 def confusion_table(gold_pages: list[Page], pred_pages: list[Page]) -> pd.DataFrame:
     """Matrice de confusion des classes de zones (lignes : vérité terrain, colonnes : prédit)."""
     names = [c.name for c in ZoneClass]
-    matrix = pd.DataFrame(0, index=names, columns=names, dtype=int)
+    counts: Counter[tuple[str, str]] = Counter()
     for gold, pred in zip(gold_pages, pred_pages, strict=True):
         for g, p in zip(gold.zones, pred.zones, strict=True):
             if g.zone_class is None or p.zone_class is None:
                 continue
-            matrix.loc[ZoneClass(g.zone_class).name, ZoneClass(p.zone_class).name] += 1
+            counts[(ZoneClass(g.zone_class).name, ZoneClass(p.zone_class).name)] += 1
+    matrix = pd.DataFrame(
+        [[counts[(row, col)] for col in names] for row in names],
+        index=names,
+        columns=names,
+        dtype=int,
+    )
     present = matrix.index[(matrix.sum(axis=1) > 0) | (matrix.sum(axis=0) > 0)]
     return matrix.loc[present, present]
 

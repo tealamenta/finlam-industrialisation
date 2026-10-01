@@ -16,6 +16,8 @@ Durcissement pour la pré-production.
 - Typage vérifié par mypy (33 fichiers), `pre-commit`, test d'intégration bout en bout, test de
   structure du DAG ; 69 tests.
 - Docs : `docs/exploitation.md` (configuration, sécurité, observabilité, versions, dimensionnement).
+- CI : mypy suit la version de l'interpréteur (stubs numpy ≥ 2.4 en syntaxe 3.12) ; matrice
+  d'évaluation construite sans affectation `.loc` (stubs pandas récents).
 
 ## 0.1.0 — 2026-09-25
 
