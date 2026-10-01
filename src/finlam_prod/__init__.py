@@ -13,4 +13,4 @@ sorties au bon format tant que celles du prototype ne sont pas branchées.
 from finlam_prod.data.schema import Issue, Page, Zone, ZoneClass
 
 __all__ = ["Issue", "Page", "Zone", "ZoneClass"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

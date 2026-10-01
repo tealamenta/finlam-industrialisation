@@ -1,6 +1,6 @@
 [project]
 name = "finlam-prod"
-version = "0.2.0"
+version = "0.3.0"
 description = "Industrialisation du pipeline FINLAM : contrat JSON, conversion ALTO/METS, contrôle qualité, évaluation, service."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,6 +24,9 @@ dependencies = [
 data = ["datasets>=2.18", "huggingface-hub>=0.23"]
 service = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 tracking = ["mlflow>=2.12"]
+image = ["opencv-python-headless>=4.9"]
+dewarp = ["opencv-python-headless>=4.9", "torch>=2.0"]
+ocr = ["pytesseract>=0.3"]  # + binaire tesseract et langue fra (mesure OCR du carnet 02)
 airflow = ["apache-airflow>=2.9"]
 notebooks = ["matplotlib>=3.8", "jupyter", "nbconvert", "nbformat"]
 dev = [

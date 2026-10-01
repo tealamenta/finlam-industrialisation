@@ -51,6 +51,9 @@ déploie, se teste et se fait évoluer séparément.
 | `convert.alto`, `convert.mets` | Conversion + validation XSD | `lxml` | profils ALTO/METS BnF |
 | `qc.checks` | Contrôles, seuils, règles issues de la littérature | `pandas` | — |
 | `evaluation.*` | Métriques du consortium, bootstrap, MLflow | `scipy`, `mlflow` (opt.) | dépôt d'évaluation TEKLIA |
+| `preprocess.fold` | Pages pliées à plat : détection du pli, éclairage, redressement par moitié | `opencv` (optionnel) | — |
+| `preprocess.dewarp` | Photos de pages pliées en 3D : dégauchissement appris (UVDoc) | `torch` (optionnel) | DocTr (licence non commerciale) |
+| `preprocess.issue` | Tâche `preprocess` : fascicule entier, images corrigées, `preprocess.json` pour le QC | — | — |
 | `service.api` | FastAPI : conversion, QC, doublure ; clé d'API, limites, `/metrics` | `fastapi` | — |
 | `config`, `logging_utils`, `errors` | Configuration `FINLAM_*`, journaux JSON, exceptions typées | stdlib | — |
 | `pipeline.registry` | Versionnage des modèles (`metadata.json`, empreintes) | stdlib | registre MLflow |

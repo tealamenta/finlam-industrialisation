@@ -9,6 +9,10 @@
 - ``evaluate``  : métriques du consortium (AS@0.5, Jaccard, BLEU) avec IC95 %, sur la
                   doublure ou sur des sorties du prototype ;
 - ``compare``   : deux structurations d'un même fascicule (ex. OLR Europeana vs pipeline) ;
+- ``preprocess``: image d'une page pliée → pli détecté, éclairage normalisé, moitiés
+                  redressées (extra ``image``) ;
+- ``dewarp``    : photo d'une page pliée en 3D / gondolée → page à plat (UVDoc, extra
+                  ``dewarp``), puis le prétraitement ci-dessus ;
 - ``serve``     : service HTTP.
 """
 
@@ -18,6 +22,7 @@ import json
 import logging
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import typer
 
@@ -263,9 +268,25 @@ def run(
 ) -> None:
     """Applique le pipeline à un fascicule et écrit JSON, ALTO, METS et rapport QC."""
     issue = _load_issue(source, cache_dir, out_dir, pages)
+    preprocess_summary = None
+    if SETTINGS.preprocess and any(p.image_path for p in issue.pages):
+        from finlam_prod.preprocess.issue import REPORT_FILE, preprocess_issue
+
+        model = None
+        if SETTINGS.dewarp:
+            from finlam_prod.preprocess.dewarp import fetch_weights, load_model
+
+            model = load_model(fetch_weights(models_dir or Path("models")))
+        target = out_dir / issue.id
+        target.mkdir(parents=True, exist_ok=True)
+        issue, report = preprocess_issue(issue, dewarp_model=model)
+        report.write(target / REPORT_FILE)
+        preprocess_summary = report.summary
     pipeline = _pipeline(models_dir)
     predicted = pipeline.run_issue(issue)
     summary = _write_outputs(predicted, out_dir / predicted.id, pipeline.name)
+    if preprocess_summary is not None:
+        summary["preprocess"] = preprocess_summary
     typer.echo(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
@@ -329,6 +350,69 @@ def compare(
         b.id = a.id  # alignement par position de page
     report = evaluate_predictions(ref.pages, cand.pages, n_boot=n_boot)
     typer.echo(report.markdown())
+
+
+@app.command()
+def preprocess(
+    image: Path = typer.Argument(..., help="image de la page (JPEG, PNG, TIFF)"),
+    out: Path | None = typer.Option(None, help="image corrigée (défaut : <nom>_pre.png)"),
+    max_angle: float = typer.Option(3.0, help="inclinaison maximale corrigée, en degrés"),
+) -> None:
+    """Prétraitement d'une page scannée pliée : pli, éclairage, inclinaison par moitié."""
+    from finlam_prod.errors import PreprocessError
+    from finlam_prod.preprocess import preprocess_page
+
+    try:
+        import cv2
+    except ImportError as exc:
+        raise PreprocessError(
+            "installer l'extra image : pip install 'finlam-prod[image]'"
+        ) from exc
+    data = cv2.imread(str(image), cv2.IMREAD_UNCHANGED)
+    if data is None:
+        raise PreprocessError(f"image illisible : {image}")
+    result = preprocess_page(data, max_angle=max_angle)
+    target = out or image.with_name(f"{image.stem}_pre.png")
+    if not cv2.imwrite(str(target), result.image):
+        raise PreprocessError(f"écriture impossible : {target}")
+    typer.echo(json.dumps({"output": str(target), **result.to_dict()}, indent=2))
+
+
+@app.command()
+def dewarp(
+    image: Path = typer.Argument(..., help="photo de la page (JPEG, PNG)"),
+    out: Path | None = typer.Option(None, help="image corrigée (défaut : <nom>_flat.png)"),
+    weights_dir: Path = typer.Option(
+        Path("models"), help="dossier des poids UVDoc (téléchargés une fois, 32 Mo)"
+    ),
+    no_preprocess: bool = typer.Option(False, help="géométrie seule, sans éclairage ni pli"),
+) -> None:
+    """Dégauchissement appris (UVDoc) d'une page photographiée, puis prétraitement."""
+    from finlam_prod.errors import PreprocessError
+    from finlam_prod.preprocess import preprocess_page
+    from finlam_prod.preprocess.dewarp import dewarp_page, fetch_weights, load_model
+
+    try:
+        import cv2
+    except ImportError as exc:
+        raise PreprocessError(
+            "installer l'extra image : pip install 'finlam-prod[image]'"
+        ) from exc
+    data = cv2.imread(str(image), cv2.IMREAD_COLOR)
+    if data is None:
+        raise PreprocessError(f"image illisible : {image}")
+    model = load_model(fetch_weights(weights_dir))
+    flat = dewarp_page(data, model)
+    report: dict[str, object] = {"dewarp": "uvdoc"}
+    output: Any = flat
+    if not no_preprocess:
+        result = preprocess_page(flat)
+        output = result.image
+        report.update(result.to_dict())
+    target = out or image.with_name(f"{image.stem}_flat.png")
+    if not cv2.imwrite(str(target), output):
+        raise PreprocessError(f"écriture impossible : {target}")
+    typer.echo(json.dumps({"output": str(target), **report}, indent=2))
 
 
 @app.command()

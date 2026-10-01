@@ -10,7 +10,9 @@ Une hiérarchie courte, pour que chaque couche sache quoi attraper :
 - :class:`DatasetError` : jeu de données absent ou inexploitable ;
 - :class:`GallicaError` : accès à l'API Gallica (ARK invalide, pas d'ALTO,
   trop d'échecs réseau) ;
-- :class:`ConversionError` : écriture ALTO/METS impossible.
+- :class:`ConversionError` : écriture ALTO/METS impossible ;
+- :class:`PreprocessError` : prétraitement d'image impossible (OpenCV absent,
+  image illisible).
 
 Les erreurs de programmation (bugs) ne sont pas converties : elles doivent
 remonter telles quelles, avec leur trace.
@@ -43,3 +45,7 @@ class GallicaError(FinlamError):
 
 class ConversionError(FinlamError):
     """Échec de production d'un fichier ALTO ou METS."""
+
+
+class PreprocessError(FinlamError):
+    """Prétraitement d'image impossible (dépendance absente, image illisible)."""

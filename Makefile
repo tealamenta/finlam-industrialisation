@@ -1,7 +1,7 @@
 .PHONY: install test lint format hooks eval serve docker
 
 install:        ## environnement de développement (uv)
-	uv sync --extra data --extra service --extra tracking --extra dev
+	uv sync --extra data --extra service --extra tracking --extra image --extra dev
 
 test:           ## tests unitaires (sans réseau)
 	uv run pytest -q

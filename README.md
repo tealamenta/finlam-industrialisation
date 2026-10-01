@@ -19,20 +19,22 @@ et un fascicule archivable dans Gallica.
 | Évaluation | `evaluation/finlam.py`, `evaluation/run.py` | **Les métriques du consortium** (AS@0.5 avec appariement hongrois, Jaccard article, BLEU_block) plus F1 par couples et tau de Kendall décomposé ; **IC95 % par bootstrap**, coût par page ; traçage MLflow optionnel |
 | Données | `data/finlam.py`, `data/la_liberte.py`, `data/gallica.py` | Jeux FINLAM multi-titres (721 p.) et **La Liberté** (8 836 p., jeu des résultats de l'article) ; client Gallica (IIIF + ALTO) à débit limité |
 | Doublure | `pipeline/rules.py`, `pipeline/ml.py` | Règles + gradient boosting produisant des sorties au bon format **en attendant celles du prototype** ; à débrancher, pas à améliorer |
+| Prétraitement d'image | `preprocess/fold.py` | **Journaux pliés et scannés** : détection du pli (bande d'ombre traversante dans le fond de page), normalisation de l'éclairage, redressement de chaque moitié ; rapport sérialisable pour le QC ; **tâche `preprocess` du DAG et de `finlam-prod run`** (`preprocess/issue.py`, `FINLAM_PREPROCESS`, `preprocess.json`) ; OpenCV, CPU, ~0,5 s/page ; pli simulé à vérité connue sur page synthétique ou réelle (`preprocess/synthetic.py`) — 40/40 plis retrouvés, 0 fausse alerte sur 40 vraies pages |
+| Dégauchissement appris | `preprocess/dewarp.py` | **Photo d'une page pliée en 3D / gondolée** → page à plat : UVDoc (SIGGRAPH Asia 2023, MIT, réseau repris dans `preprocess/uvdoc_net.py`, poids téléchargés et vérifiés par empreinte), CPU < 1 s ; puis le prétraitement ci-dessus ; DocTr substituable derrière la même interface (licence non commerciale) ; extra `dewarp` (torch) |
 | Service | `service/api.py` | FastAPI : `POST /issues` (JSON → zip ALTO+METS+QC), `/issues/qc`, `/issues/predict` ; OpenAPI sur `/docs` ; clé d'API optionnelle, limites de taille, `/metrics` Prometheus, journal des requêtes |
 | Configuration et journaux | `config.py`, `logging_utils.py` | Une seule source (`FINLAM_*`, `.env`) pour la CLI, le service et le DAG ; journaux JSON une ligne par événement en exploitation |
 | Erreurs | `errors.py` | Exceptions typées par couche (`ContractError`, `DatasetError`, `GallicaError`, `ConversionError`) ; contrat JSON validé champ par champ ; CLI → une ligne et code 1, service → 422/500 |
 | Versionnage des modèles | `pipeline/registry.py` | `metadata.json` à l'entraînement (version, données, empreintes SHA-256, commit, versions) ; vérification au chargement ; modèles tracés dans MLflow |
-| Orchestration | `dags/finlam_pipeline.py` | DAG Airflow : fetch → predict → convert → qc → archive ou relecture humaine |
-| Analyse | `evaluation/viz.py`, `notebooks/` | Figures d'analyse d'erreurs (distributions avec IC, confusion, pages dessinées vérité terrain / prédiction) ; deux carnets : `00_cadre_evaluation` (reproduire le **cadre** de l'article : jeu, split, métriques, contrôles ; pas ses chiffres, ses modèles ne sont pas publics) et `01_analyse_resultats_la_liberte` (notre apport : IC95 %, distributions, confusion, pages dessinées) |
+| Orchestration | `dags/finlam_pipeline.py` | DAG Airflow : fetch → **preprocess** → predict → convert → qc → archive ou relecture humaine ; le résumé QC reprend les pages pliées / inclinées |
+| Analyse | `evaluation/viz.py`, `notebooks/` | Figures d'analyse d'erreurs (distributions avec IC, confusion, pages dessinées vérité terrain / prédiction) ; trois carnets : `00_cadre_evaluation` (reproduire le **cadre** de l'article : jeu, split, métriques, contrôles ; pas ses chiffres, ses modèles ne sont pas publics) `01_analyse_resultats_la_liberte` (notre apport : IC95 %, distributions, confusion, pages dessinées) et `02_pretraitement_pages_pliees` (journaux pliés : avant/après sur page synthétique, sur 40 vraies pages de La Liberté à pli simulé, fausses alertes sur les scans d'origine, sur toute image déposée dans `data/samples/`, photo d'une page pliée en 3D remise à plat par UVDoc, tâche `preprocess` sur un fascicule, et OCR avant/après contre la transcription de référence) |
 | Documentation | `docs/` | DAT, installation, exploitation (configuration, sécurité, observabilité), constats sur les données, protocole de jeu gold, état de l'art, plan du rapport ANR |
 
 ## Installation et prise en main
 
 ```bash
 python -m venv .venv && source .venv/bin/activate          # ou uv venv
-pip install -e ".[data,service,dev]"                        # + [tracking] pour MLflow, [airflow] pour le DAG
-pytest                                                      # 69 tests, sans réseau ; mypy et ruff en CI
+pip install -e ".[data,service,dev]"                        # + [tracking] MLflow, [airflow] DAG, [image] OpenCV, [dewarp] torch, [ocr] tesseract
+pytest                                                      # 87 tests, sans réseau ; mypy et ruff en CI
 
 finlam-prod download --dataset la-liberte --split test      # le split de l'article (433 pages)
 finlam-prod evaluate --dataset la-liberte --split test      # règles seules, métriques du consortium + IC95 %
@@ -43,8 +45,10 @@ finlam-prod run bpt6k7155522 --pages 1,2,3 --models-dir models   # fascicule Gal
 finlam-prod convert results/run/bpt6k7155522/pipeline.json  # le contrat JSON seul → ALTO/METS/QC
 finlam-prod qc results/run/bpt6k7155522/mets.xml            # QC d'un METS/ALTO existant
 finlam-prod compare ancien/mets.xml nouveau/mets.xml        # OLR existant vs nouveau, mêmes métriques
+finlam-prod preprocess scan_plie.jpg                        # pli, éclairage, inclinaison → scan_plie_pre.png + rapport
+finlam-prod dewarp photo_pliee.jpg                          # page photographiée en 3D → à plat (UVDoc) + prétraitement
 finlam-prod serve                                           # http://127.0.0.1:8000/docs
-jupyter lab notebooks/                                      # 00 cadre de l'article, 01 analyse d'erreurs (extra [notebooks])
+jupyter lab notebooks/                                      # 00 cadre, 01 analyse d'erreurs, 02 pages pliées (extra [notebooks])
 ```
 
 Quand les sorties du prototype sont disponibles : `finlam-prod evaluate --predictions dossier_json/` les
@@ -101,9 +105,40 @@ limites) et `/metrics` (Prometheus : requêtes par route et statut, temps cumul�
 erreurs QC et XSD). Les modèles entraînés portent un `metadata.json` (version, jeu, empreintes,
 commit) vérifié au chargement. Détail : `docs/exploitation.md`.
 
-Qualité du code : PEP 8 et imports par ruff, typage vérifié par mypy, 69 tests dont un bout en bout
+Qualité du code : PEP 8 et imports par ruff, typage vérifié par mypy, 87 tests dont un bout en bout
 (fascicule synthétique → doublure → contrat → ALTO/METS validés → relecture → évaluation) ; tout
 tourne en CI sur Python 3.10-3.12 et en `pre-commit`.
+
+## Prétraitement des pages pliées
+
+Un journal plié en deux puis numérisé à plat présente une ombre le long du pli, une inclinaison
+différente de chaque côté, et parfois du texte perdu dans le pli. Les deux premiers défauts se
+corrigent avant l'OCR et la segmentation, sur CPU, avec OpenCV ; le troisième se signale au QC.
+
+![origine / pliée / corrigée](docs/img/pli_avant_apres.png)
+
+Le pli est cherché dans le **fond** de la page (fermeture morphologique qui efface l'encre), comme une
+bande verticale qui s'écarte de la tendance et traverse les trois tiers de la hauteur ; l'image est
+divisée par ce fond, ce qui gomme l'ombre et le vignettage sans toucher à l'encre ; chaque côté est
+ensuite redressé de l'angle qui rend le profil des lignes le plus contrasté, par un `remap` sur
+l'image entière (près du pli, un côté reprend ses pixels de l'autre côté de la coupe : aucun texte
+n'est perdu, le blanc ne va qu'aux marges). Mesuré sur **40 vraies
+pages de La Liberté** avec un pli simulé (vérité connue, carnet `02`) : pli retrouvé sur 40/40 (médiane
+1 px), texte horizontal après correction (résiduel médian 0°, max 0,5°), et **0 fausse détection sur
+les 433 scans d'origine du split test** (`scripts/find_worst_pages.py` : aucune page pliée dans ce
+jeu ; les pires cas réels sont des inclinaisons jusqu'à 1,8°, corrigées, et deux pleines pages de
+publicité dont la colonne vide a servi à durcir le détecteur — un pli est une ombre, pas une bande
+claire). **Photo d'une page pliée en 3D** (gondolage, perspective) : hors de portée d'OpenCV seul ; le
+dégauchissement appris **UVDoc** (`preprocess/dewarp.py`, `finlam-prod dewarp`) remet la page à plat
+en moins d'une seconde CPU, puis le prétraitement ci-dessus enlève les ombres — démonstration sur
+photo dans le carnet `02`, section 6. **Dans la chaîne** : tâche `preprocess` du DAG entre `fetch` et
+`predict`, et `finlam-prod run` (`FINLAM_PREPROCESS=1` par défaut, `FINLAM_DEWARP=1` pour les photos) ;
+chaque page avec image est corrigée, `preprocess.json` est écrit et le résumé QC reprend
+`folded_pages` / `skewed_pages` (carnet `02`, section 7). **Le juge en aval** (section 8) : Tesseract
+sur le tiers central, rappel de mots contre la transcription de référence de *La Liberté*, six pages —
+origine 41,5 %, origine + normalisation d'éclairage **44,7 %** (+3,2), pliée 25,7 % (−15,8),
+corrigée **30,9 %** (+5,2 : un tiers de la perte récupéré, le reste est du texte écrasé dans le pli).
+La correction rend des points et n'en coûte pas ; mesure à refaire avec l'OCR de production de la BnF. Ce qui n'est pas couvert : le texte physiquement caché dans le pli.
 
 ## Choix techniques
 

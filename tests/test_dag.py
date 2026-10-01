@@ -20,6 +20,16 @@ def test_dag_structure(monkeypatch, tmp_path):
     dag = module.dag
     assert dag.dag_id == "finlam_pipeline"
     tasks = {t.task_id: t for t in dag.tasks}
-    assert set(tasks) == {"fetch", "predict", "convert", "qc", "route", "archive", "review"}
+    assert set(tasks) == {
+        "fetch",
+        "preprocess",
+        "predict",
+        "convert",
+        "qc",
+        "route",
+        "archive",
+        "review",
+    }
     assert tasks["route"].downstream_task_ids == {"archive", "review"}
-    assert tasks["fetch"].downstream_task_ids == {"predict"}
+    assert tasks["fetch"].downstream_task_ids == {"preprocess"}
+    assert tasks["preprocess"].downstream_task_ids == {"predict"}

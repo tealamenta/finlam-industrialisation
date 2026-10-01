@@ -2,12 +2,15 @@
 
 Chaîne par fascicule :
 
-    fetch → predict → convert → qc → route
-                                       ├── archive   (QC sans erreur bloquante)
-                                       └── review    (QC bloquant : relecture humaine)
+    fetch → preprocess → predict → convert → qc → route
+                                                    ├── archive   (QC sans erreur bloquante)
+                                                    └── review    (QC bloquant : relecture humaine)
 
 - ``fetch``   : récupère le fascicule (ARK Gallica : images + ALTO via l'API, ou
   identifiant en cache) ;
+- ``preprocess`` : chaque page qui a une image → pli détecté et corrigé, éclairage
+  normalisé, inclinaison redressée (OpenCV) ; UVDoc si ``FINLAM_DEWARP`` (photos) ;
+  rapport ``preprocess.json`` repris dans le résumé QC (pages pliées, inclinées) ;
 - ``predict`` : appelle le prototype FINLAM s'il est déployé (variable Airflow
   ``FINLAM_PREDICT_URL``), sinon la doublure locale ;
 - ``convert`` : contrat JSON → ALTO 4.4 + METS, validation XSD ;
@@ -45,6 +48,18 @@ _SETTINGS = get_settings()
 WORK_DIR = Path(Variable.get("FINLAM_WORK_DIR", default_var=str(_SETTINGS.work_dir)))
 MODELS_DIR = Variable.get("FINLAM_MODELS_DIR", default_var=str(_SETTINGS.models_dir or ""))
 PREDICT_URL = Variable.get("FINLAM_PREDICT_URL", default_var=_SETTINGS.predict_url)
+PREPROCESS = str(Variable.get("FINLAM_PREPROCESS", default_var=_SETTINGS.preprocess)).lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+DEWARP = str(Variable.get("FINLAM_DEWARP", default_var=_SETTINGS.dewarp)).lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 
 def _target(context) -> Path:
@@ -68,12 +83,36 @@ def fetch(**context) -> str:
     return str(target)
 
 
+def preprocess(**context) -> str:
+    """Pli, éclairage, inclinaison sur chaque page qui a une image ; rapport pour le QC."""
+    from finlam_prod.data.schema import Issue, load_pages, save_pages
+    from finlam_prod.preprocess.issue import REPORT_FILE, preprocess_issue
+
+    target = Path(context["ti"].xcom_pull(task_ids="fetch"))
+    pages = load_pages(target / "input.jsonl")
+    issue = Issue(id=target.name, name=target.name, pages=pages)
+    if not PREPROCESS:
+        save_pages(pages, target / "input_pre.jsonl")
+        return str(target)
+    model = None
+    if DEWARP:
+        from finlam_prod.preprocess.dewarp import fetch_weights, load_model
+
+        model = load_model(fetch_weights(Path(MODELS_DIR or "models")))
+    corrected, report = preprocess_issue(
+        issue, out_dir=target / "preprocessed", dewarp_model=model
+    )
+    report.write(target / REPORT_FILE)
+    save_pages(corrected.pages, target / "input_pre.jsonl")
+    return str(target)
+
+
 def predict(**context) -> str:
     from finlam_prod.data.schema import Issue, load_pages
     from finlam_prod.pipeline.run import Pipeline, write_issue_json
 
-    target = Path(context["ti"].xcom_pull(task_ids="fetch"))
-    pages = load_pages(target / "input.jsonl")
+    target = Path(context["ti"].xcom_pull(task_ids="preprocess"))
+    pages = load_pages(target / "input_pre.jsonl")
     issue = Issue(id=target.name, name=target.name, pages=pages)
     if PREDICT_URL:
         import requests
@@ -129,6 +168,9 @@ def qc(**context) -> dict:
     findings_table(findings).to_csv(target / "qc_findings.csv", index=False)
     summary = summarise(findings, len(issue.pages))
     summary["xsd_errors"] = result["xsd_errors"]
+    report_path = target / "preprocess.json"
+    if report_path.is_file():
+        summary["preprocess"] = json.loads(report_path.read_text())["summary"]
     (target / "qc_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
     return summary
 
@@ -161,6 +203,7 @@ with DAG(
     default_args={"retries": 1},
 ) as dag:
     t_fetch = PythonOperator(task_id="fetch", python_callable=fetch)
+    t_preprocess = PythonOperator(task_id="preprocess", python_callable=preprocess)
     t_predict = PythonOperator(task_id="predict", python_callable=predict)
     t_convert = PythonOperator(task_id="convert", python_callable=convert)
     t_qc = PythonOperator(task_id="qc", python_callable=qc)
@@ -168,4 +211,4 @@ with DAG(
     t_archive = PythonOperator(task_id="archive", python_callable=archive)
     t_review = PythonOperator(task_id="review", python_callable=review)
 
-    t_fetch >> t_predict >> t_convert >> t_qc >> t_route >> [t_archive, t_review]
+    t_fetch >> t_preprocess >> t_predict >> t_convert >> t_qc >> t_route >> [t_archive, t_review]

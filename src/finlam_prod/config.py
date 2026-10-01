@@ -59,6 +59,8 @@ class Settings:
     log_level: str = "INFO"
     log_json: bool = False
     mlflow_experiment: str = "finlam-prod"
+    preprocess: bool = True  # pli, éclairage, inclinaison sur chaque page qui a une image
+    dewarp: bool = False  # dégauchissement appris (UVDoc) : photos seulement
     source: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
@@ -85,7 +87,7 @@ class Settings:
                     kwargs[f.name] = int(raw)
                 except ValueError as exc:
                     raise ValueError(f"{key} doit être un entier, reçu {raw!r}") from exc
-            elif f.name == "log_json":
+            elif f.name in ("log_json", "preprocess", "dewarp"):
                 kwargs[f.name] = raw.lower() in ("1", "true", "yes", "on")
             elif f.name == "log_level":
                 level = raw.upper()
