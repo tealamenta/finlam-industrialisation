@@ -15,3 +15,7 @@ dist/
 .DS_Store
 /mlruns/
 /airflow/
+.venv*/
+mlflow.db
+_to_delete*
+.expected.md5

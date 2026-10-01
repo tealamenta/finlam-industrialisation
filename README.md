@@ -19,25 +19,32 @@ et un fascicule archivable dans Gallica.
 | Évaluation | `evaluation/finlam.py`, `evaluation/run.py` | **Les métriques du consortium** (AS@0.5 avec appariement hongrois, Jaccard article, BLEU_block) plus F1 par couples et tau de Kendall décomposé ; **IC95 % par bootstrap**, coût par page ; traçage MLflow optionnel |
 | Données | `data/finlam.py`, `data/la_liberte.py`, `data/gallica.py` | Jeux FINLAM multi-titres (721 p.) et **La Liberté** (8 836 p., jeu des résultats de l'article) ; client Gallica (IIIF + ALTO) à débit limité |
 | Doublure | `pipeline/rules.py`, `pipeline/ml.py` | Règles + gradient boosting produisant des sorties au bon format **en attendant celles du prototype** ; à débrancher, pas à améliorer |
-| Service | `service/api.py` | FastAPI : `POST /issues` (JSON → zip ALTO+METS+QC), `/issues/qc`, `/issues/predict` ; OpenAPI sur `/docs` |
+| Service | `service/api.py` | FastAPI : `POST /issues` (JSON → zip ALTO+METS+QC), `/issues/qc`, `/issues/predict` ; OpenAPI sur `/docs` ; clé d'API optionnelle, limites de taille, `/metrics` Prometheus, journal des requêtes |
+| Configuration et journaux | `config.py`, `logging_utils.py` | Une seule source (`FINLAM_*`, `.env`) pour la CLI, le service et le DAG ; journaux JSON une ligne par événement en exploitation |
+| Erreurs | `errors.py` | Exceptions typées par couche (`ContractError`, `DatasetError`, `GallicaError`, `ConversionError`) ; contrat JSON validé champ par champ ; CLI → une ligne et code 1, service → 422/500 |
+| Versionnage des modèles | `pipeline/registry.py` | `metadata.json` à l'entraînement (version, données, empreintes SHA-256, commit, versions) ; vérification au chargement ; modèles tracés dans MLflow |
 | Orchestration | `dags/finlam_pipeline.py` | DAG Airflow : fetch → predict → convert → qc → archive ou relecture humaine |
-| Documentation | `docs/` | DAT, installation, constats sur les données, protocole de jeu gold, état de l'art, plan du rapport ANR |
+| Analyse | `evaluation/viz.py`, `notebooks/` | Figures d'analyse d'erreurs (distributions avec IC, confusion, pages dessinées vérité terrain / prédiction) ; deux carnets : `00_cadre_evaluation` (reproduire le **cadre** de l'article : jeu, split, métriques, contrôles ; pas ses chiffres, ses modèles ne sont pas publics) et `01_analyse_resultats_la_liberte` (notre apport : IC95 %, distributions, confusion, pages dessinées) |
+| Documentation | `docs/` | DAT, installation, exploitation (configuration, sécurité, observabilité), constats sur les données, protocole de jeu gold, état de l'art, plan du rapport ANR |
 
 ## Installation et prise en main
 
 ```bash
 python -m venv .venv && source .venv/bin/activate          # ou uv venv
 pip install -e ".[data,service,dev]"                        # + [tracking] pour MLflow, [airflow] pour le DAG
-pytest                                                      # 45 tests, sans réseau
+pytest                                                      # 69 tests, sans réseau ; mypy et ruff en CI
 
 finlam-prod download --dataset la-liberte --split test      # le split de l'article (433 pages)
 finlam-prod evaluate --dataset la-liberte --split test      # règles seules, métriques du consortium + IC95 %
-finlam-prod train --dataset la-liberte && finlam-prod evaluate --dataset la-liberte --models-dir models
+finlam-prod download --dataset la-liberte --split validation   # 446 pages, suffit à la doublure
+finlam-prod train --dataset la-liberte --split validation --models-dir models/la_liberte
+finlam-prod evaluate --dataset la-liberte --split test --models-dir models/la_liberte
 finlam-prod run bpt6k7155522 --pages 1,2,3 --models-dir models   # fascicule Gallica → JSON, ALTO, METS, QC
 finlam-prod convert results/run/bpt6k7155522/pipeline.json  # le contrat JSON seul → ALTO/METS/QC
 finlam-prod qc results/run/bpt6k7155522/mets.xml            # QC d'un METS/ALTO existant
 finlam-prod compare ancien/mets.xml nouveau/mets.xml        # OLR existant vs nouveau, mêmes métriques
 finlam-prod serve                                           # http://127.0.0.1:8000/docs
+jupyter lab notebooks/                                      # 00 cadre de l'article, 01 analyse d'erreurs (extra [notebooks])
 ```
 
 Quand les sorties du prototype sont disponibles : `finlam-prod evaluate --predictions dossier_json/` les
@@ -46,30 +53,57 @@ Quand les sorties du prototype sont disponibles : `finlam-prod evaluate --predic
 ## Résultats
 
 Métriques de l'article (AS@0.5, Jaccard, BLEU_block) rapportées avec IC95 % (bootstrap sur les pages),
-au format de HIPE-OCRepair (ICDAR 2026). **Jeu FINLAM multi-titres, split test (48 pages)** :
+au format de HIPE-OCRepair (ICDAR 2026).
 
-| métrique | règles seules | doublure (règles + boosting) |
+**La Liberté, split test de l'article (433 pages, 88 951 zones)** — les chiffres comparables :
+
+| métrique | règles seules | doublure (règles + boosting, entraînée sur le split *val*, 446 p.) | pipeline FINLAM (article) | Arcanum (article) |
+|---|---|---|---|---|
+| AS@0.5 F1 | 0.264 [0.250 ; 0.276] | **0.424 [0.409 ; 0.438]** | 0.804 | 0.594 |
+| AS@0.5 mIoU | 0.742 | 0.808 | — | — |
+| Jaccard article | 0.716 [0.696 ; 0.734] | 0.784 [0.768 ; 0.799] | — | — |
+| BLEU_block (ordre) | 0.625 [0.612 ; 0.638] | 0.625 | 0.872 | — |
+| F1 par couples | 0.471 | 0.585 | — | — |
+| exactitude classes / F1 macro | 0.626 / 0.395 | 0.938 / 0.674 | — | — |
+| coût par page (CPU, 1 cœur) | 0.025 s | 0.089 s | 0.83 s GPU / 1.66 s CPU | — |
+
+Lecture : la doublure, sans modèle d'image et entraînée sur 446 pages, fait la moitié du pipeline du
+consortium sur la séparation d'articles et vaut le plancher attendu ; l'ordre de lecture est le même
+dans les deux lignes (même découpage XY guidé par les colonnes, le boosting ne touche pas à l'ordre).
+Les intervalles sur 433 pages font ± 1,5 point : c'est l'ordre de grandeur à viser pour un jeu gold
+(`docs/protocole_gold.md`). Chiffres du consortium : Mocaër et al. 2026, table des résultats, même
+split ; ils restent à reproduire avec leurs sorties (`--predictions`).
+
+**Jeu FINLAM multi-titres, split test (48 pages)** — non comparable à l'article, utile pour la
+largeur des intervalles :
+
+| métrique | règles seules | doublure |
 |---|---|---|
 | AS@0.5 F1 | 0.188 [0.152 ; 0.232] | 0.280 [0.221 ; 0.341] |
-| AS@0.5 mIoU | 0.708 | 0.695 |
 | Jaccard article | 0.413 | 0.468 |
 | BLEU_block (ordre) | 0.526 [0.484 ; 0.568] | 0.526 |
-| F1 par couples | 0.392 | 0.540 |
-| exactitude classes / F1 macro | 0.601 / 0.345 | 0.827 / 0.353 |
-| coût par page (CPU, 1 cœur) | 0.062 s | 0.157 s |
-
-Ces chiffres **ne sont pas comparables** à ceux de l'article (F1 articles 80,4 % du pipeline, 59,4 %
-d'Arcanum) : jeu différent (multi-titres, plus dur que La Liberté) et doublure sans modèle d'image.
-Ils servent à trois choses : vérifier que la chaîne d'évaluation produit les bonnes métriques, montrer
-la largeur des intervalles sur 48 pages (± 6 points), et donner un plancher. La comparaison honnête
-se fait sur le split test de La Liberté (`--dataset la-liberte`), avec les sorties du prototype.
+| coût par page (CPU) | 0.062 s | 0.157 s |
 
 Ce que l'analyse des données a montré, et qui conditionne toute lecture de ces chiffres
-(`docs/donnees_finlam.md`) : dans le jeu multi-titres, la séquence des articles de `zone_orders` est un
-tri lexicographique d'identifiants (artefact d'export), 40 % des articles annotés n'ont pas de titre,
-et les polygones se touchent bord à bord. L'article lui-même signale une vérité terrain dérivée des
-METS/ALTO existants et un gold standard « en cours » ; `docs/protocole_gold.md` propose comment le
-constituer.
+(`docs/donnees_finlam.md`) : les zones de *La Liberté* sont des **lignes** (205 par page, 23 articles
+par page), celles du multi-titres des blocs ; les coordonnées sont en fraction dans l'un, en
+pourcentage dans l'autre ; dans le multi-titres, la séquence des articles de `zone_orders` est un tri
+lexicographique d'identifiants, 40 % des articles n'ont pas de titre, et les polygones se touchent
+bord à bord. L'article signale une vérité terrain dérivée des METS/ALTO existants et un gold
+standard « en cours » ; `docs/protocole_gold.md` propose comment le constituer.
+
+## Exploitation
+
+Tout se règle par variables d'environnement `FINLAM_*` (ou un fichier `.env`) : chemins, clé d'API
+(`FINLAM_API_KEY`, en-tête `X-API-Key`), limites de taille des requêtes, niveau et format des
+journaux (`FINLAM_LOG_JSON=1`), expérience MLflow. Le service expose `/health` (version, modèle,
+limites) et `/metrics` (Prometheus : requêtes par route et statut, temps cumulé, pages traitées,
+erreurs QC et XSD). Les modèles entraînés portent un `metadata.json` (version, jeu, empreintes,
+commit) vérifié au chargement. Détail : `docs/exploitation.md`.
+
+Qualité du code : PEP 8 et imports par ruff, typage vérifié par mypy, 69 tests dont un bout en bout
+(fascicule synthétique → doublure → contrat → ALTO/METS validés → relecture → évaluation) ; tout
+tourne en CI sur Python 3.10-3.12 et en `pre-commit`.
 
 ## Choix techniques
 
@@ -85,6 +119,8 @@ constituer.
 
 ## Limites connues
 
+vLLM et Ollama, cités dans l'offre, ne sont pas utilisés : il n'y a pas de modèle de langage dans
+cette chaîne ; ils entreraient en jeu pour une post-correction OCR par LLM, hors périmètre ici.
 Positions des lignes et des mots dans l'ALTO estimées par répartition dans le bloc (un ALTO de
 production reprend celles de l'OCR) ; profils ALTO/METS de la BnF (`alto_bnf-v2_0`, METS BnF) non
 encore appliqués ; sorties réelles du prototype non branchées ; comparaison avec l'OLR d'Europeana

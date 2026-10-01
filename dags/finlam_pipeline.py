@@ -37,9 +37,14 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import BranchPythonOperator, PythonOperator
 
-WORK_DIR = Path(Variable.get("FINLAM_WORK_DIR", default_var="/tmp/finlam_prod"))
-MODELS_DIR = Variable.get("FINLAM_MODELS_DIR", default_var="")
-PREDICT_URL = Variable.get("FINLAM_PREDICT_URL", default_var="")
+# Les variables Airflow ont priorité ; sinon la configuration du paquet (FINLAM_* dans
+# l'environnement ou .env), pour que le DAG, la CLI et le service lisent les mêmes valeurs.
+from finlam_prod.config import get_settings  # noqa: E402
+
+_SETTINGS = get_settings()
+WORK_DIR = Path(Variable.get("FINLAM_WORK_DIR", default_var=str(_SETTINGS.work_dir)))
+MODELS_DIR = Variable.get("FINLAM_MODELS_DIR", default_var=str(_SETTINGS.models_dir or ""))
+PREDICT_URL = Variable.get("FINLAM_PREDICT_URL", default_var=_SETTINGS.predict_url)
 
 
 def _target(context) -> Path:

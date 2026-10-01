@@ -52,3 +52,38 @@ def test_qc_endpoint_and_invalid_payload(client, test_pages):
     assert r.status_code == 200 and "summary" in r.json()
     bad = client.post("/issues/qc", json={"issue_id": "x", "pages": [{"nope": 1}]})
     assert bad.status_code == 422
+
+
+def test_api_key_required_when_configured(simple_page):
+    from finlam_prod.config import Settings
+    from finlam_prod.pipeline.run import page_to_json
+
+    settings = Settings.from_env({"FINLAM_API_KEY": "secret"}, dotenv=None)
+    client = TestClient(create_app(settings=settings))
+    body = {"issue_id": "i", "pages": [page_to_json(simple_page)]}
+    assert client.get("/health").status_code == 200  # santé toujours ouverte
+    assert client.post("/issues/qc", json=body).status_code == 401
+    assert client.post("/issues/qc", json=body, headers={"X-API-Key": "faux"}).status_code == 401
+    assert client.post("/issues/qc", json=body, headers={"X-API-Key": "secret"}).status_code == 200
+
+
+def test_size_limits_return_413(simple_page):
+    from finlam_prod.config import Settings
+    from finlam_prod.pipeline.run import page_to_json
+
+    settings = Settings.from_env({"FINLAM_MAX_PAGES": "1"}, dotenv=None)
+    client = TestClient(create_app(settings=settings))
+    one = page_to_json(simple_page)
+    assert (
+        client.post("/issues/qc", json={"issue_id": "i", "pages": [one, one]}).status_code == 413
+    )
+
+
+def test_metrics_endpoint_counts_requests(simple_page):
+    from finlam_prod.pipeline.run import page_to_json
+
+    client = TestClient(create_app())
+    client.post("/issues/qc", json={"issue_id": "i", "pages": [page_to_json(simple_page)]})
+    text = client.get("/metrics").text
+    assert 'finlam_requests_total{method="POST",route="/issues/qc",status="200"} 1' in text
+    assert "finlam_pages_total 1" in text

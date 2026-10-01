@@ -157,12 +157,12 @@ def mean_over_pages(per_page: list[dict[str, float]]) -> dict[str, float]:
 
 
 def gold_classes(page: Page) -> list[int]:  # noqa: D103
-    return [int(z.zone_class) for z in page.zones]
+    return [int(z.zone_class) if z.zone_class is not None else -1 for z in page.zones]
 
 
 def gold_order(page: Page) -> list[int]:  # noqa: D103
-    return [int(z.order) for z in page.zones]
+    return [z.order_key for z in page.zones]
 
 
 def gold_articles(page: Page) -> list[int]:  # noqa: D103
-    return [int(z.article_id) for z in page.zones]
+    return [z.article for z in page.zones]

@@ -238,7 +238,7 @@ def make_page(
 
 def make_pages(n_pages: int, seed: int = 0, pages_per_issue: int = 4) -> list[Page]:
     """Génère ``n_pages`` pages réparties en fascicules de ``pages_per_issue`` pages."""
-    pages = []
+    pages: list[Page] = []
     for i in range(n_pages):
         issue_id = f"synth-issue-{seed}-{i // pages_per_issue}"
         index = i % pages_per_issue + 1
@@ -246,7 +246,7 @@ def make_pages(n_pages: int, seed: int = 0, pages_per_issue: int = 4) -> list[Pa
             0
             if index == 1
             else max(
-                (z.article_id for p in pages if p.issue_id == issue_id for z in p.zones),
+                (z.article for p in pages if p.issue_id == issue_id for z in p.zones),
                 default=0,
             )
         )

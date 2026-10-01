@@ -17,34 +17,42 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from types import ModuleType
 
 import typer
 
+from finlam_prod.config import get_settings
 from finlam_prod.data.schema import Issue, group_by_issue
+from finlam_prod.errors import DatasetError, FinlamError
+from finlam_prod.logging_utils import configure_logging
+from finlam_prod.pipeline.run import Pipeline
 
 app = typer.Typer(
     help="Industrialisation du pipeline FINLAM : conversion, QC, évaluation, service."
 )
-DEFAULT_CACHE = Path("data/cache")
+SETTINGS = get_settings()
+DEFAULT_CACHE = SETTINGS.cache_dir
+DEFAULT_RESULTS = SETTINGS.results_dir
 DATASETS = ("finlam", "la-liberte")
+LOGGER = logging.getLogger(__name__)
 
 
 @app.callback()
 def _setup(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(SETTINGS, level="DEBUG" if verbose else None)
+    LOGGER.debug("configuration : %s", SETTINGS.describe())
 
 
-def _module(dataset: str):
+def _module(dataset: str) -> ModuleType:
     if dataset == "la-liberte":
-        from finlam_prod.data import la_liberte as module
-    elif dataset == "finlam":
-        from finlam_prod.data import finlam as module
-    else:
-        raise typer.BadParameter("--dataset doit valoir finlam ou la-liberte")
-    return module
+        from finlam_prod.data import la_liberte
+
+        return la_liberte
+    if dataset == "finlam":
+        from finlam_prod.data import finlam
+
+        return finlam
+    raise typer.BadParameter("--dataset doit valoir finlam ou la-liberte")
 
 
 @app.command()
@@ -64,13 +72,24 @@ def download(
         typer.echo(f"{dataset} / {name}: {describe(pages)}")
 
 
-def _pipeline(models_dir: Path | None):
+def _pipeline(models_dir: Path | None) -> Pipeline:
     from finlam_prod.pipeline.run import Pipeline
 
     if models_dir is None:
         return Pipeline()
     from finlam_prod.pipeline.ml import BoundarySegmenter, GradientBoostingZoneClassifier
+    from finlam_prod.pipeline.registry import check_compatibility, load_metadata
 
+    meta = load_metadata(models_dir)  # vérifie les empreintes, avertit si non versionné
+    if meta is not None:
+        check_compatibility(meta)
+        LOGGER.info(
+            "doublure %s (%s/%s, %d pages)",
+            meta.model_version,
+            meta.dataset,
+            meta.split,
+            meta.n_pages,
+        )
     return Pipeline(
         GradientBoostingZoneClassifier.load(models_dir / "zone_classifier.joblib"),
         segmenter=BoundarySegmenter.load(models_dir / "segmenter.joblib"),
@@ -80,6 +99,7 @@ def _pipeline(models_dir: Path | None):
 @app.command()
 def train(
     dataset: str = typer.Option("la-liberte"),
+    split: str = typer.Option("train", help="Split d'entraînement (validation : plus léger)"),
     cache_dir: Path = typer.Option(DEFAULT_CACHE),
     models_dir: Path = typer.Option(Path("models")),
     limit: int | None = typer.Option(None, help="Limiter le nombre de pages d'entraînement"),
@@ -94,13 +114,27 @@ def train(
 
         pages = make_pages(limit or 80, seed=1)
     else:
-        pages = load_split("train", cache_dir, dataset)
+        pages = load_split(split, cache_dir, dataset)
         if limit:
             pages = pages[:limit]
+    from finlam_prod.evaluation.tracking import log_models
+    from finlam_prod.pipeline.registry import write_metadata
+
     models_dir.mkdir(parents=True, exist_ok=True)
     GradientBoostingZoneClassifier().fit(pages).save(models_dir / "zone_classifier.joblib")
     BoundarySegmenter().fit(pages).save(models_dir / "segmenter.joblib")
-    typer.echo(f"Doublure entraînée sur {len(pages)} pages → {models_dir}")
+    meta = write_metadata(
+        models_dir,
+        dataset="synthetic" if synthetic else dataset,
+        split=split,
+        n_pages=len(pages),
+        notes="doublure : classifieur de lignes + frontières d'articles",
+    )
+    log_models(models_dir, meta, experiment=SETTINGS.mlflow_experiment)
+    typer.echo(
+        f"Doublure entraînée sur {len(pages)} pages ({dataset}/{split}) → {models_dir} "
+        f"[version {meta.model_version}]"
+    )
 
 
 @app.command()
@@ -108,11 +142,13 @@ def evaluate(
     dataset: str = typer.Option("la-liberte"),
     split: str = typer.Option("test"),
     cache_dir: Path = typer.Option(DEFAULT_CACHE),
-    models_dir: Path | None = typer.Option(None, help="Doublure entraînée (sinon règles seules)"),
+    models_dir: Path | None = typer.Option(
+        SETTINGS.models_dir, help="Doublure entraînée (sinon règles seules) ; FINLAM_MODELS_DIR"
+    ),
     predictions: Path | None = typer.Option(
         None, help="JSON de sorties du prototype à évaluer à la place de la doublure"
     ),
-    results_dir: Path = typer.Option(Path("results")),
+    results_dir: Path = typer.Option(DEFAULT_RESULTS),
     n_boot: int = typer.Option(1000),
     synthetic: bool = typer.Option(False),
 ) -> None:
@@ -144,6 +180,12 @@ def evaluate(
     results_dir.mkdir(parents=True, exist_ok=True)
     from finlam_prod.evaluation.tracking import log_report
 
+    model_version = None
+    if models_dir is not None:
+        from finlam_prod.pipeline.registry import load_metadata
+
+        meta = load_metadata(models_dir, verify=False)
+        model_version = meta.model_version if meta else None
     log_report(
         report,
         {
@@ -151,7 +193,9 @@ def evaluate(
             "split": split,
             "pipeline": tag.rsplit("_", 1)[-1],
             "models_dir": models_dir,
+            "model_version": model_version or "",
         },
+        experiment=SETTINGS.mlflow_experiment,
     )
     report.per_page.to_csv(results_dir / f"eval_{tag}_pages.csv", index=False)
     report.table().to_csv(results_dir / f"eval_{tag}.csv", index=False)
@@ -174,7 +218,7 @@ def _load_issue(source: str, cache_dir: Path, work_dir: Path, pages: str | None)
         for split in ("test", "validation", "val", "train"):
             try:
                 loaded = load_split(split, cache_dir, dataset)
-            except FileNotFoundError:
+            except DatasetError:
                 continue
             issues = {i.id: i for i in group_by_issue(loaded)}
             if source in issues:
@@ -184,7 +228,7 @@ def _load_issue(source: str, cache_dir: Path, work_dir: Path, pages: str | None)
     )
 
 
-def _write_outputs(issue: Issue, target: Path, pipeline_name: str) -> dict:
+def _write_outputs(issue: Issue, target: Path, pipeline_name: str) -> dict[str, object]:
     from finlam_prod.convert.alto import validate_alto, write_alto
     from finlam_prod.convert.mets import validate_mets, write_mets
     from finlam_prod.pipeline.run import write_issue_json
@@ -197,7 +241,7 @@ def _write_outputs(issue: Issue, target: Path, pipeline_name: str) -> dict:
     mets_errors = validate_mets(write_mets(issue, target / "mets.xml"))
     findings = check_issue(issue)
     findings_table(findings).to_csv(target / "qc_findings.csv", index=False)
-    summary = summarise(findings, len(issue.pages))
+    summary: dict[str, object] = dict(summarise(findings, len(issue.pages)))
     summary.update(
         {
             "alto_xsd_errors": alto_errors,
@@ -214,7 +258,7 @@ def run(
     source: str = typer.Argument(..., help="ARK Gallica ou identifiant de fascicule en cache"),
     out_dir: Path = typer.Option(Path("results/run")),
     cache_dir: Path = typer.Option(DEFAULT_CACHE),
-    models_dir: Path | None = typer.Option(None),
+    models_dir: Path | None = typer.Option(SETTINGS.models_dir),
     pages: str | None = typer.Option(None, help="Vues à traiter, ex. 1,2,3 (Gallica)"),
 ) -> None:
     """Applique le pipeline à un fascicule et écrit JSON, ALTO, METS et rapport QC."""
@@ -291,7 +335,7 @@ def compare(
 def serve(
     host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(8000),
-    models_dir: Path | None = typer.Option(None),
+    models_dir: Path | None = typer.Option(SETTINGS.models_dir),
 ) -> None:
     """Lance le service HTTP (FastAPI) : POST /issues → ALTO, METS, QC."""
     import uvicorn
@@ -301,5 +345,14 @@ def serve(
     uvicorn.run(create_app(models_dir), host=host, port=port)
 
 
+def main() -> None:
+    """Point d'entrée : erreur attendue → une ligne et code 1 ; bug → trace complète."""
+    try:
+        app()
+    except FinlamError as exc:
+        typer.secho(f"Erreur : {exc}", err=True, fg=typer.colors.RED)
+        raise SystemExit(1) from exc
+
+
 if __name__ == "__main__":
-    app()
+    main()

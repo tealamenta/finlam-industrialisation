@@ -133,12 +133,12 @@ def finlam_page_scores(
     threshold: float = 0.5,
 ) -> dict[str, float]:
     """Toutes les métriques FINLAM d'une page, à partir des prédictions."""
-    gold_articles = [int(z.article_id) for z in page.zones]
+    gold_articles = [z.article for z in page.zones]
     areas = [max(z.area, 1e-9) for z in page.zones]
     scores = article_separation(gold_articles, pred_articles, areas, threshold)
     scores["jaccard_article"] = jaccard_count(gold_articles, pred_articles)
     if pred_order is not None:
-        scores["bleu_block"] = bleu_block([int(z.order) for z in page.zones], pred_order)
+        scores["bleu_block"] = bleu_block([z.order_key for z in page.zones], pred_order)
     return scores
 
 

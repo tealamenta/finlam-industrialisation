@@ -21,6 +21,7 @@ reconnu est ignoré et compté dans ``warnings``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,15 +33,15 @@ from finlam_prod.data.schema import NO_ARTICLE, Issue, Page
 LOGGER = logging.getLogger(__name__)
 
 
-def _local(tag) -> str:
+def _local(tag: object) -> str:
     return etree.QName(tag).localname if isinstance(tag, str) else ""
 
 
-def _iter(element, name: str):
+def _iter(element: etree._Element, name: str) -> Iterator[etree._Element]:
     return (e for e in element.iter() if _local(e.tag) == name)
 
 
-def _href(element) -> str | None:
+def _href(element: etree._Element) -> str | None:
     for key, value in element.attrib.items():
         if key.endswith("}href") or key == "href":
             return value
@@ -114,7 +115,7 @@ def read_mets_alto(mets_path: str | Path, issue_id: str | None = None) -> MetsAl
             zone.order = position  # l'ordre des blocs dans le PrintSpace vaut ordre de lecture
         pages[fid] = page
         for i, zone in enumerate(page.zones):
-            block_owner[(fid, zone.id)] = (fid, i)
+            block_owner[f"{fid}\x00{zone.id}"] = (fid, i)
 
     # structMap LOGICAL : articles → blocs
     logical = next(
@@ -130,7 +131,7 @@ def read_mets_alto(mets_path: str | Path, issue_id: str | None = None) -> MetsAl
                 continue
             n_articles += 1
             for area in _iter(div, "area"):
-                key = (area.get("FILEID"), area.get("BEGIN"))
+                key = f"{area.get('FILEID')}\x00{area.get('BEGIN')}"
                 owner = block_owner.get(key)
                 if owner is None:
                     warnings.append(f"area non résolue : {key}")

@@ -14,11 +14,18 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from finlam_prod.evaluation.run import EvaluationReport
+    from finlam_prod.pipeline.registry import ModelMetadata
 
 LOGGER = logging.getLogger(__name__)
 
 
-def log_report(report, params: dict[str, object], experiment: str = "finlam-prod") -> str | None:
+def log_report(
+    report: EvaluationReport, params: dict[str, object], experiment: str = "finlam-prod"
+) -> str | None:
     """Enregistre un ``EvaluationReport`` dans MLflow ; renvoie l'identifiant du run."""
     try:
         import mlflow
@@ -40,4 +47,32 @@ def log_report(report, params: dict[str, object], experiment: str = "finlam-prod
             (target / "summary.md").write_text(report.markdown(), encoding="utf-8")
             mlflow.log_artifacts(str(target))
         LOGGER.info("Évaluation tracée dans MLflow, run %s", run.info.run_id)
+        return run.info.run_id
+
+
+def log_models(
+    models_dir: str | Path, meta: ModelMetadata, experiment: str = "finlam-prod"
+) -> str | None:
+    """Enregistre un dossier de modèles (fichiers + metadata) comme run MLflow."""
+    try:
+        import mlflow
+    except ImportError:
+        LOGGER.info("mlflow absent : modèles non tracés")
+        return None
+    mlflow.set_experiment(experiment)
+    with mlflow.start_run(run_name=f"train-{meta.model_version}") as run:
+        mlflow.log_params(
+            {
+                "dataset": meta.dataset,
+                "split": meta.split,
+                "n_pages": meta.n_pages,
+                "model_version": meta.model_version,
+                "package_version": meta.package_version,
+                "git_commit": meta.git_commit or "",
+                "sklearn_version": meta.sklearn_version,
+            }
+        )
+        mlflow.set_tag("stage", "train")
+        mlflow.log_artifacts(str(models_dir), artifact_path="models")
+        LOGGER.info("Modèles tracés dans MLflow, run %s", run.info.run_id)
         return run.info.run_id

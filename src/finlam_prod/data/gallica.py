@@ -15,25 +15,28 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import requests
 from lxml import etree
 
 from finlam_prod.data.schema import Page, Zone
+from finlam_prod.errors import ConversionError, GallicaError
 
 LOGGER = logging.getLogger(__name__)
 
 GALLICA = "https://gallica.bnf.fr"
 ARK_PREFIX = "ark:/12148/"
-USER_AGENT = "finlam-prod/0.1 (projet personnel ; contact via GitHub)"
+# Gallica refuse le User-Agent python par défaut (403) : chaîne de navigateur, identifiée
+USER_AGENT = "Mozilla/5.0 (compatible; finlam-prod/0.1; +https://github.com)"
 
 
 def normalise_ark(ark: str) -> str:
     """Ramène « ark:/12148/bpt6k…», une URL Gallica ou « bpt6k… » au seul nom ARK."""
     match = re.search(r"(bpt6k[0-9a-z]+|btv1b[0-9a-z]+|cb[0-9a-z]+)", ark)
     if not match:
-        raise ValueError(f"Identifiant ARK non reconnu : {ark!r}")
+        raise GallicaError(f"Identifiant ARK non reconnu : {ark!r}")
     return match.group(1)
 
 
@@ -63,7 +66,13 @@ class GallicaClient:
             if wait > 0:
                 time.sleep(wait)
             self._last_call = time.monotonic()
-            response = self.session.get(url, params=params or None, timeout=self.timeout)
+            try:
+                response = self.session.get(url, params=params or None, timeout=self.timeout)
+            except requests.RequestException as exc:  # réseau coupé, DNS, délai dépassé
+                LOGGER.warning("%s (essai %d/%d)", exc, attempt, self.max_retries)
+                time.sleep(delay)
+                delay *= 2
+                continue
             if response.status_code == 429 or response.status_code >= 500:
                 LOGGER.warning(
                     "HTTP %s sur %s (essai %d/%d), attente %.0fs",
@@ -76,9 +85,14 @@ class GallicaClient:
                 time.sleep(delay)
                 delay *= 2
                 continue
-            response.raise_for_status()
+            if response.status_code >= 400:  # 4xx : inutile de réessayer, on explique
+                hint = {
+                    403: "accès refusé (document non diffusable, OCR absent ou blocage du client)",
+                    404: "document ou vue introuvable",
+                }.get(response.status_code, "requête refusée")
+                raise GallicaError(f"HTTP {response.status_code}, {hint} : {response.url}")
             return response
-        raise RuntimeError(f"Abandon après {self.max_retries} essais : {url}")
+        raise GallicaError(f"Abandon après {self.max_retries} essais : {url}")
 
     # --------------------------------------------------------------- services
     def pagination(self, ark: str) -> int:
@@ -88,7 +102,7 @@ class GallicaClient:
         root = etree.fromstring(response.content)
         nb = root.findtext(".//nbVueImages")
         if nb is None:
-            raise ValueError(f"Pagination indisponible pour {ark}")
+            raise GallicaError(f"Pagination indisponible pour {ark}")
         return int(nb)
 
     def manifest(self, ark: str) -> dict:
@@ -110,7 +124,7 @@ class GallicaClient:
         ark = normalise_ark(ark)
         response = self._get(f"{GALLICA}/RequestDigitalElement", O=ark, E="ALTO", Deb=page)
         if b"<alto" not in response.content[:2000]:
-            raise ValueError(f"Pas d'ALTO pour {ark} vue {page} (document sans OCR ?)")
+            raise GallicaError(f"Pas d'ALTO pour {ark} vue {page} (document sans OCR ?)")
         return response.content
 
     def fetch_issue(
@@ -152,7 +166,7 @@ def _local(tag: str) -> str:
     return etree.QName(tag).localname
 
 
-def _iter(element: etree._Element, name: str):
+def _iter(element: etree._Element, name: str) -> Iterator[etree._Element]:
     return (child for child in element.iter() if _local(child.tag) == name)
 
 
@@ -170,11 +184,11 @@ def parse_bnf_alto(xml: bytes, page_id: str, issue_id: str, index: int) -> Page:
     root = etree.fromstring(xml)
     page_el = next(_iter(root, "Page"), None)
     if page_el is None:
-        raise ValueError("ALTO sans élément Page")
+        raise ConversionError("ALTO sans élément Page")
     page_w = float(page_el.get("WIDTH", 0)) or None
     page_h = float(page_el.get("HEIGHT", 0)) or None
     if not page_w or not page_h:
-        raise ValueError("ALTO sans dimensions de page")
+        raise ConversionError("ALTO sans dimensions de page")
 
     zones: list[Zone] = []
     blocks = (e for e in root.iter() if _local(e.tag) in ("TextBlock", "Illustration"))

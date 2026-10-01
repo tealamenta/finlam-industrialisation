@@ -38,3 +38,26 @@ def test_bootstrap_ci_contains_mean():
     per_page = [{"m": v} for v in [0.2, 0.4, 0.6, 0.8]]
     mean, low, high = bootstrap_ci(per_page, n_boot=200)["m"]
     assert abs(mean - 0.5) < 1e-9 and low <= mean <= high
+
+
+def test_viz_helpers_run_headless(tmp_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import pandas as pd
+
+    from finlam_prod.data.synthetic import make_pages
+    from finlam_prod.evaluation import viz
+    from finlam_prod.pipeline.run import Pipeline
+
+    pages = make_pages(4, seed=3)
+    preds = [Pipeline().run(p) for p in pages]
+    table = pd.DataFrame({"page_id": [p.id for p in pages], "as_f1": [0.2, 0.4, 0.6, 0.8]})
+    viz.plot_metric_distribution({"a": table, "b": table}, "as_f1")
+    viz.plot_metric_by(table, pages, "as_f1", "zones")
+    matrix = viz.confusion_table(pages, preds)
+    assert matrix.values.sum() == sum(len(p.zones) for p in pages)
+    viz.plot_confusion(matrix)
+    fig = viz.compare_page(pages[0], preds[0])
+    fig.savefig(tmp_path / "page.png")
+    assert (tmp_path / "page.png").stat().st_size > 0

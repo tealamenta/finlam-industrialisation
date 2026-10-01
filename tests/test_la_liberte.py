@@ -38,3 +38,11 @@ def test_row_to_page_la_liberte_fields():
     assert page.zones[0].raw_class == "TITLE" and page.zones[0].section_id == 1
     assert page.zones[1].article_id == 3
     assert page.articles() and NO_ARTICLE not in page.articles()
+
+
+def test_polygon_scale_detects_fractions():
+    from finlam_prod.data.la_liberte import polygon_scale
+
+    assert polygon_scale([[[0.1, 0.2], [0.9, 0.95]]]) == 100.0
+    assert polygon_scale([[[10.0, 20.0], [90.0, 95.0]]]) == 1.0
+    assert polygon_scale([]) == 100.0

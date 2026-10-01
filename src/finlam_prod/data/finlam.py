@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from finlam_prod.data.schema import Page, Zone, load_pages, save_pages
+from finlam_prod.errors import DatasetError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ def load_split(split: str, cache_dir: str | Path, dataset: str = "finlam") -> li
     prefix = dataset.replace("-", "_")
     target = Path(cache_dir) / f"{prefix}_{split}.jsonl"
     if not target.exists():
-        raise FileNotFoundError(
+        raise DatasetError(
             f"{target} introuvable : lancez d'abord "
             f"`finlam-prod download --dataset {dataset} --split {split}`."
         )

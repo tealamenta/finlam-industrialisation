@@ -16,6 +16,7 @@ ainsi que le coût par page.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
@@ -32,6 +33,8 @@ from finlam_prod.evaluation.metrics import (
     ordering_scores,
 )
 from finlam_prod.pipeline.run import Pipeline
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,8 +77,8 @@ class EvaluationReport:
 
 def _page_scores(gold: Page, pred: Page) -> dict[str, float]:
     classes = [int(z.zone_class) if z.zone_class is not None else -1 for z in pred.zones]
-    order = [int(z.order) for z in pred.zones]
-    articles = [int(z.article_id) for z in pred.zones]
+    order = [z.order_key for z in pred.zones]
+    articles = [z.article for z in pred.zones]
     scores: dict[str, float] = {}
     if all(z.zone_class is not None for z in gold.zones):
         cls = classification_scores(gold_classes(gold), classes)
@@ -100,7 +103,8 @@ def evaluate_predictions(
 ) -> EvaluationReport:
     """Compare des pages prédites (même ``id`` et mêmes zones) aux pages annotées."""
     gold_by_id = {p.id: p for p in gold_pages}
-    rows = []
+    rows: list[dict[str, object]] = []
+    scores: list[dict[str, float]] = []
     for pred in predicted_pages:
         gold = gold_by_id.get(pred.id)
         if gold is None:
@@ -109,12 +113,22 @@ def evaluate_predictions(
             raise ValueError(
                 f"Page {pred.id} : {len(pred.zones)} zones prédites, {len(gold.zones)} annotées"
             )
-        rows.append({"page_id": pred.id, **_page_scores(gold, pred)})
+        page_scores = _page_scores(gold, pred)
+        scores.append(page_scores)
+        rows.append({"page_id": pred.id, **page_scores})
     per_page = pd.DataFrame(rows)
-    scores = [{k: v for k, v in r.items() if k != "page_id"} for r in rows]
-    return EvaluationReport(
-        per_page, bootstrap_ci(scores, n_boot=n_boot), seconds_per_page, len(rows), n_boot
+    summary = bootstrap_ci(scores, n_boot=n_boot)
+    missing = len(predicted_pages) - len(rows)
+    if missing:
+        LOGGER.warning("%d pages prédites sans annotation correspondante, ignorées", missing)
+    LOGGER.info(
+        "évaluation : %d pages, AS@0.5 F1 %.3f [%.3f ; %.3f], bootstrap %d tirages",
+        len(rows),
+        *summary.get("as_f1", (float("nan"),) * 3),
+        n_boot,
+        extra={"n_pages": len(rows), "n_boot": n_boot, "as_f1": summary.get("as_f1", (None,))[0]},
     )
+    return EvaluationReport(per_page, summary, seconds_per_page, len(rows), n_boot)
 
 
 def evaluate_pipeline(

@@ -58,6 +58,26 @@ haut de colonne 4 continue l'article de la colonne 3 demande de comprendre le te
 sujet, phrase coupée). C'est le cas d'usage d'un modèle de langue, et le cœur du problème de
 recherche FINLAM.
 
+## 6. *La Liberté* : des lignes, pas des blocs, et des coordonnées en fraction
+
+Le jeu des résultats de l'article n'a pas la même granularité que le multi-titres : 205 zones par
+page en moyenne (88 951 zones pour 433 pages de test), 23 articles par page, hauteur médiane de zone
+1,2 % de la page. Ce sont des **lignes de texte** regroupées en articles, pas des blocs. Les métriques
+du consortium (AS@0.5, Jaccard, BLEU_block) sont donc calculées sur des lignes ; un F1 d'articles à
+80 % s'y lit comme « 80 % des articles retrouvés à IoU ≥ 0,5 sur l'union de leurs lignes ». Question
+à poser au consortium : le pipeline déployé travaille-t-il au bloc (YOLO) puis redistribue-t-il les
+lignes, ou évalue-t-il directement au bloc ?
+
+Les polygones y sont en **fraction de page** (0-1) alors que le multi-titres est en pourcentage
+(0-100). Le chargeur détecte l'échelle (`polygon_scale`) ; sans cela toutes les règles géométriques
+étaient fausses en silence (exactitude de classes 2 %, aucune erreur levée). Leçon pour la chaîne
+de production : **valider les bornes de coordonnées à l'entrée** (le QC le fait : `geometry`).
+
+Les 16 classes se ramènent aux 13 du paquet sans classe inconnue ; `TEXT` fait 84 % des zones,
+`TITLE` 8 %, `INSIDEHEADING` et `SUBTITLE` 2 % chacun. Aucune zone `ASIDE`, `TABLECONTENT`,
+`ADVERTISEMENT`, `ANNOUNCEMENT`, `CAPTION` ni `AUTHOR` dans le split test : les classes rares de la
+taxonomie n'y sont pas mesurables.
+
 ## Conséquences pour l'évaluation et le rapport
 
 - Rapporter `intra_article_tau` et `article_seq_tau` séparément, et ne pas interpréter un tau global

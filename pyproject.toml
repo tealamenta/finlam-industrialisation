@@ -1,6 +1,6 @@
 [project]
 name = "finlam-prod"
-version = "0.1.0"
+version = "0.2.0"
 description = "Industrialisation du pipeline FINLAM : contrat JSON, conversion ALTO/METS, contrôle qualité, évaluation, service."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,10 +25,20 @@ data = ["datasets>=2.18", "huggingface-hub>=0.23"]
 service = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 tracking = ["mlflow>=2.12"]
 airflow = ["apache-airflow>=2.9"]
-dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.5", "httpx>=0.27"]
+notebooks = ["matplotlib>=3.8", "jupyter", "nbconvert", "nbformat"]
+dev = [
+    "mypy>=1.10",
+    "pre-commit",
+    "types-requests",
+    "pandas-stubs",
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff>=0.5",
+    "httpx>=0.27",
+]
 
 [project.scripts]
-finlam-prod = "finlam_prod.cli:app"
+finlam-prod = "finlam_prod.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -54,3 +64,14 @@ ignore = ["D203", "D213", "D107", "D401"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["finlam_prod"]
+mypy_path = "src"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_incomplete_defs = true

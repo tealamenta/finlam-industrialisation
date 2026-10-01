@@ -34,12 +34,14 @@ from finlam_prod.data.schema import (
     load_pages,
     save_pages,
 )
+from finlam_prod.errors import DatasetError
 
 LOGGER = logging.getLogger(__name__)
 
 HF_DATASET = "Teklia/Newspapers-finlam-La-Liberte"
 SPLITS = ("train", "validation", "test")
 CACHE_PREFIX = "la_liberte"
+SPLIT_FILE_PREFIX = {"validation": "val"}  # nom du split et des parquets sur le Hub
 
 CLASS_MAPPING: dict[str, ZoneClass] = {
     # même nom, avec ou sans préfixe ARTICLE-
@@ -112,6 +114,16 @@ def map_class(
     return int(mapped), label
 
 
+def polygon_scale(polygons: list) -> float:
+    """Facteur ramenant les polygones en pourcentage de page.
+
+    Le jeu multi-titres stocke les coordonnées en pourcentage (0-100),
+    La Liberté en fraction (0-1) : on détecte l'échelle sur le maximum observé.
+    """
+    top = max((float(v) for poly in polygons for point in poly for v in point), default=0.0)
+    return 100.0 if top <= 1.5 else 1.0
+
+
 def row_to_page(
     row: dict[str, Any],
     names: list[str] | None,
@@ -139,12 +151,15 @@ def row_to_page(
             if not Path(image_path).exists():
                 image.convert("RGB").save(image_path, quality=90)
 
-    articles = row.get("zone_article_ids", row.get("article_id"))
+    articles = row.get("zone_article_ids", row.get("article_id")) or [None] * len(
+        row["zone_polygons"]
+    )
     sections = row.get("zone_section_ids") or [None] * len(row["zone_polygons"])
     zone_ids = row.get("zone_arkindex_ids") or [
         f"{page_id}_z{i}" for i in range(len(row["zone_polygons"]))
     ]
     zones = []
+    scale = polygon_scale(row["zone_polygons"])
     for zid, polygon, text, raw_class, order, article, section in zip(
         zone_ids,
         row["zone_polygons"],
@@ -159,7 +174,7 @@ def row_to_page(
         zones.append(
             Zone(
                 id=str(zid),
-                polygon=[(float(x), float(y)) for x, y in polygon],
+                polygon=[(float(x) * scale, float(y) * scale) for x, y in polygon],
                 text=text or "",
                 zone_class=klass,
                 order=int(order),
@@ -192,16 +207,39 @@ def download_split(
     enregistrées (elles ne servent qu'aux notebooks). Nécessite l'extra
     ``data`` et un accès à huggingface.co.
     """
-    from datasets import load_dataset
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise DatasetError("extra 'data' absent : pip install 'finlam-prod[data]'") from exc
 
     cache_dir = Path(cache_dir)
-    target = cache_dir / f"{CACHE_PREFIX}_{split}.jsonl"
-    if target.exists() and limit is None:
+    suffix = f"_n{limit}" if limit is not None else ""
+    # un --limit écrit un cache à part : il n'écrase pas le split complet
+    target = cache_dir / f"{CACHE_PREFIX}_{split}{suffix}.jsonl"
+    if target.exists():
         LOGGER.info("Cache présent, rechargement de %s", target)
         return load_pages(target)
     LOGGER.info("Téléchargement de %s (%s)", HF_DATASET, split)
-    dataset = load_dataset(HF_DATASET, split=split)
+    # Seuls les parquets du split demandé sont téléchargés et convertis : le jeu
+    # complet (10 Go, images incluses) ne tient pas forcément sur un poste.
+    prefix = SPLIT_FILE_PREFIX.get(split, split)
+    dataset = load_dataset(
+        HF_DATASET,
+        split=prefix,
+        data_files={prefix: f"data/{prefix}-*.parquet"},
+        verification_mode="no_checks",  # sinon datasets exige les autres splits
+    )
     names = class_names_from_features(dataset.features)
+    if names is None:
+        # les parquets seuls peuvent perdre les ClassLabel : on relit la carte du jeu
+        from datasets import load_dataset_builder
+
+        names = class_names_from_features(load_dataset_builder(HF_DATASET).info.features)
+    if names is None:
+        raise DatasetError(
+            "Noms de classes de La Liberté introuvables : sans eux les entiers seraient "
+            "mal interprétés (16 classes ≠ 13 du paquet). Voir la carte du jeu sur le Hub."
+        )
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / f"{CACHE_PREFIX}_classes.json").write_text(
         json.dumps(

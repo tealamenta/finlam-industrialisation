@@ -9,6 +9,7 @@ conversion en pixels n'a lieu qu'à l'export ALTO.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from enum import IntEnum
@@ -80,6 +81,16 @@ class Zone:
     confidence: float | None = None
     section_id: int | None = None
     raw_class: str | None = None
+
+    @property
+    def order_key(self) -> int:
+        """Rang de lecture utilisable pour trier (zones sans rang en dernier)."""
+        return self.order if self.order is not None else sys.maxsize
+
+    @property
+    def article(self) -> int:
+        """Identifiant d'article, ``NO_ARTICLE`` si la zone n'en a pas."""
+        return self.article_id if self.article_id is not None else NO_ARTICLE
 
     @property
     def bbox(self) -> tuple[float, float, float, float]:

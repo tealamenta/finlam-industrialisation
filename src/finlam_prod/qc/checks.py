@@ -10,6 +10,7 @@ bord ou une reprise manuelle.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -25,6 +26,8 @@ from finlam_prod.data.schema import (
     Page,
     ZoneClass,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -168,7 +171,7 @@ def check_reading_order(page: Page, config: QCConfig) -> list[Finding]:
                 "ordre de lecture absent sur certaines zones",
             )
         ]
-    if sorted(orders) != list(range(len(orders))):
+    if sorted(o for o in orders if o is not None) != list(range(len(orders))):
         return [
             Finding(
                 "error",
@@ -237,7 +240,7 @@ def check_confidence(page: Page, config: QCConfig) -> list[Finding]:
     scored = [z for z in page.zones if z.confidence is not None]
     if not scored:
         return []
-    low = [z for z in scored if z.confidence < config.min_confidence]
+    low = [z for z in scored if z.confidence is not None and z.confidence < config.min_confidence]
     findings = [
         Finding("warning", "low_confidence", page.id, z.id, f"confiance {z.confidence:.2f}")
         for z in low
@@ -363,6 +366,23 @@ def check_issue(issue: Issue, config: QCConfig | None = None) -> list[Finding]:
                     f"article {article_id} sur des pages non contiguës {pages}",
                 )
             )
+    errors = sum(1 for f in findings if f.severity == "error")
+    warnings = len(findings) - errors
+    LOGGER.info(
+        "QC fascicule %s : %d pages, %d erreurs, %d avertissements → %s",
+        issue.id,
+        len(issue.pages),
+        errors,
+        warnings,
+        "relecture" if errors else "archive",
+        extra={
+            "issue_id": issue.id,
+            "n_pages": len(issue.pages),
+            "qc_errors": errors,
+            "qc_warnings": warnings,
+            "route": "review" if errors else "archive",
+        },
+    )
     return findings
 
 

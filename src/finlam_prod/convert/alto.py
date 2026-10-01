@@ -22,6 +22,7 @@ Choix d'encodage :
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -30,6 +31,9 @@ from lxml import etree
 
 from finlam_prod import __version__
 from finlam_prod.data.schema import NO_ARTICLE, Page, Zone, ZoneClass
+from finlam_prod.errors import ConversionError
+
+LOGGER = logging.getLogger(__name__)
 
 ALTO_NS = "http://www.loc.gov/standards/alto/ns-v4#"
 XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
@@ -156,7 +160,7 @@ def page_to_alto(page: Page, image_filename: str | None = None) -> etree._Elemen
     for klass in used_classes:
         label = ZoneClass(klass).label
         _el(tags, "LayoutTag", ID=f"LT_{label}", LABEL=label, TYPE="zone_class")
-    article_ids = sorted({z.article_id for z in ordered if z.article_id not in (None, NO_ARTICLE)})
+    article_ids = sorted({z.article for z in ordered if z.article != NO_ARTICLE})
     for article in article_ids:
         _el(
             tags,
@@ -237,9 +241,13 @@ def _block_id(zone: Zone) -> str:
 def write_alto(page: Page, path: str | Path, image_filename: str | None = None) -> Path:
     """Écrit l'ALTO d'une page (UTF-8, indenté)."""
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tree = etree.ElementTree(page_to_alto(page, image_filename))
-    tree.write(str(path), xml_declaration=True, encoding="UTF-8", pretty_print=True)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tree = etree.ElementTree(page_to_alto(page, image_filename))
+        tree.write(str(path), xml_declaration=True, encoding="UTF-8", pretty_print=True)
+    except (OSError, etree.LxmlError) as exc:
+        raise ConversionError(f"ALTO de la page {page.id} non écrit dans {path} : {exc}") from exc
+    LOGGER.debug("ALTO écrit : %s (%d zones)", path, len(page.zones))
     return path
 
 

@@ -51,7 +51,9 @@ déploie, se teste et se fait évoluer séparément.
 | `convert.alto`, `convert.mets` | Conversion + validation XSD | `lxml` | profils ALTO/METS BnF |
 | `qc.checks` | Contrôles, seuils, règles issues de la littérature | `pandas` | — |
 | `evaluation.*` | Métriques du consortium, bootstrap, MLflow | `scipy`, `mlflow` (opt.) | dépôt d'évaluation TEKLIA |
-| `service.api` | FastAPI : conversion, QC, doublure | `fastapi` | — |
+| `service.api` | FastAPI : conversion, QC, doublure ; clé d'API, limites, `/metrics` | `fastapi` | — |
+| `config`, `logging_utils`, `errors` | Configuration `FINLAM_*`, journaux JSON, exceptions typées | stdlib | — |
+| `pipeline.registry` | Versionnage des modèles (`metadata.json`, empreintes) | stdlib | registre MLflow |
 | `dags/finlam_pipeline.py` | Orchestration par fascicule | Airflow | file de traitement interne |
 
 ## 4. Choix structurants
@@ -69,9 +71,19 @@ déploie, se teste et se fait évoluer séparément.
 
 ## 5. Qualité logicielle
 
-PEP 8 via ruff (E/W/F/I/N/UP/B/SIM/D), docstrings sur l'API publique, 45 tests pytest sans réseau
-(fixtures synthétiques, aller-retour METS/ALTO, service via TestClient), CI sur Python 3.10-3.12,
-journalisation par module, `random_state` fixé, Dockerfile sans torch.
+PEP 8 via ruff (E/W/F/I/N/UP/B/SIM/D), docstrings sur l'API publique, 69 tests pytest sans réseau
+(fixtures synthétiques, aller-retour METS/ALTO, service via TestClient, erreurs, bout en bout, structure du DAG), typage vérifié par mypy, pre-commit, CI sur Python
+3.10-3.12, journalisation par module, `random_state` fixé, Dockerfile sans torch.
+
+**Gestion des erreurs** (`errors.py`). Une hiérarchie courte distingue les erreurs *attendues* des
+bugs : `FinlamError` (base), `ContractError` (contrat JSON invalide : clé manquante, type inattendu,
+classe inconnue, polygone dégénéré — avec la page et le champ fautifs), `DatasetError` (jeu absent ou
+inexploitable), `GallicaError` (ARK, pagination, ALTO absent, échecs réseau après reprises),
+`ConversionError` (écriture ALTO/METS). Chaque couche sait quoi attraper : la CLI affiche une ligne et
+sort avec le code 1 ; le service renvoie 422 pour un contrat invalide et 500 pour le reste, avec le
+message ; le DAG laisse remonter pour qu'Airflow relance ou marque la tâche en échec. Les erreurs de
+programmation ne sont jamais converties : elles gardent leur trace. Règle : on attrape près de la
+cause ce qu'on sait traduire en message utile, et rien d'autre.
 
 ## 6. Ce qui reste pour la production BnF
 
@@ -81,5 +93,5 @@ journalisation par module, `random_state` fixé, Dockerfile sans torch.
 | Profils BnF | ALTO 4.4 / METS standard | `alto_bnf-v2_0`, METS BnF, positions fines des lignes/mots reprises de l'OCR |
 | Compatibilité avec l'existant | lecteur METS/ALTO + `compare` | exécuter sur fascicules communs avec l'OLR Europeana Newspapers |
 | Jeu gold | protocole écrit | constitution avec le consortium (`docs/protocole_gold.md`) |
-| Exploitation | DAG et service locaux | file de fascicules, métriques Prometheus, image signée, utilisateur non-root, secrets |
+| Exploitation | config centralisée, clé d'API, `/metrics`, journaux JSON, modèles versionnés (`docs/exploitation.md`) | file de fascicules, TLS et débit au reverse proxy, image signée, utilisateur non-root, secrets |
 | Modèles | doublure | brancher les modèles du prototype (workers Arkindex ou service dédié) |

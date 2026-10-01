@@ -16,6 +16,7 @@ Newspapers, chaîne OLR de la BnF) :
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -25,6 +26,9 @@ from lxml import etree
 from finlam_prod import __version__
 from finlam_prod.convert.alto import _block_id
 from finlam_prod.data.schema import NO_ARTICLE, Issue, Page, Zone, ZoneClass
+from finlam_prod.errors import ConversionError
+
+LOGGER = logging.getLogger(__name__)
 
 METS_NS = "http://www.loc.gov/METS/"
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -137,9 +141,9 @@ def issue_to_mets(
     articles: dict[int, list[tuple[Page, Zone]]] = {}
     for page in issue.pages:
         for zone in page.zones_in_order():
-            if zone.article_id in (None, NO_ARTICLE):
+            if zone.article == NO_ARTICLE:
                 continue
-            articles.setdefault(zone.article_id, []).append((page, zone))
+            articles.setdefault(zone.article, []).append((page, zone))
     links: list[tuple[str, str]] = []
     for order, (article_id, members) in enumerate(sorted(articles.items()), start=1):
         div = _el(
@@ -173,13 +177,24 @@ def issue_to_mets(
     return root
 
 
-def write_mets(issue: Issue, path: str | Path, **kwargs) -> Path:
+def write_mets(
+    issue: Issue,
+    path: str | Path,
+    alto_names: dict[str, str] | None = None,
+    image_names: dict[str, str] | None = None,
+) -> Path:
     """Écrit le METS d'un fascicule."""
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    etree.ElementTree(issue_to_mets(issue, **kwargs)).write(
-        str(path), xml_declaration=True, encoding="UTF-8", pretty_print=True
-    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        etree.ElementTree(issue_to_mets(issue, alto_names, image_names)).write(
+            str(path), xml_declaration=True, encoding="UTF-8", pretty_print=True
+        )
+    except (OSError, etree.LxmlError) as exc:
+        raise ConversionError(
+            f"METS du fascicule {issue.id} non écrit dans {path} : {exc}"
+        ) from exc
+    LOGGER.info("METS écrit : %s (%d pages)", path, len(issue.pages), extra={"issue_id": issue.id})
     return path
 
 

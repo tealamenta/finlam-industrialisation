@@ -7,6 +7,8 @@ pour une chaîne de production à 20 millions de pages par an.
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 
 import joblib
@@ -22,6 +24,8 @@ from finlam_prod.pipeline.features import (
     page_feature_matrix,
     pair_features,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _boundaries_from_gold(page: Page, indices: list[int]) -> list[int]:
@@ -61,9 +65,17 @@ class GradientBoostingZoneClassifier:
         return np.hstack([geometry, np.round(text, 6)])
 
     def fit(self, pages: list[Page]) -> GradientBoostingZoneClassifier:  # noqa: D102
+        started = time.perf_counter()
         x = self._matrix(pages, fit_text=True)
         y = np.array([z.zone_class for p in pages for z in p.zones])
         self.model.fit(x, y)
+        LOGGER.info(
+            "classifieur de zones : %d exemples, %d caractéristiques, %d classes, %.1fs",
+            x.shape[0],
+            x.shape[1],
+            len(set(y.tolist())),
+            time.perf_counter() - started,
+        )
         return self
 
     def predict(self, page: Page) -> list[int]:  # noqa: D102
@@ -101,7 +113,7 @@ class BoundarySegmenter:
     def fit(self, pages: list[Page]) -> BoundarySegmenter:  # noqa: D102
         rows, labels = [], []
         for page in pages:
-            indices = sorted(range(len(page.zones)), key=lambda i: page.zones[i].order)
+            indices = sorted(range(len(page.zones)), key=lambda i: page.zones[i].order_key)
             columns = estimate_columns(page)
             gold = _boundaries_from_gold(page, indices)
             for pos in range(1, len(indices)):

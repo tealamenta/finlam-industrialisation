@@ -1,13 +1,16 @@
-.PHONY: install test lint format eval serve docker
+.PHONY: install test lint format hooks eval serve docker
 
 install:        ## environnement de développement (uv)
-	uv venv && uv pip install -e ".[data,service,tracking,dev]"
+	uv sync --extra data --extra service --extra tracking --extra dev
 
 test:           ## tests unitaires (sans réseau)
 	uv run pytest -q
 
-lint:           ## PEP 8 / docstrings
-	uv run ruff check src tests dags && uv run ruff format --check src tests dags
+lint:           ## PEP 8 / docstrings / typage
+	uv run ruff check src tests dags && uv run ruff format --check src tests dags && uv run mypy
+
+hooks:          ## installe les crochets pre-commit
+	uv run pre-commit install
 
 format:
 	uv run ruff format src tests dags && uv run ruff check --fix src tests dags
