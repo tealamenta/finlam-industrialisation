@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+/data/
+/models/
+/results/*
+!/results/*.md
+!/results/.gitkeep
+.DS_Store
+/mlruns/
+/airflow/

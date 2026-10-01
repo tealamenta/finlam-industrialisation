@@ -1,0 +1,56 @@
+[project]
+name = "finlam-prod"
+version = "0.1.0"
+description = "Industrialisation du pipeline FINLAM : contrat JSON, conversion ALTO/METS, contrôle qualité, évaluation, service."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mohamed Horache" }]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "lxml>=4.9",
+    "requests>=2.31",
+    "pillow>=10.0",
+    "typer>=0.12",
+    "pyarrow>=14.0",
+    "joblib>=1.3",
+    "tabulate>=0.9",
+]
+
+[project.optional-dependencies]
+data = ["datasets>=2.18", "huggingface-hub>=0.23"]
+service = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
+tracking = ["mlflow>=2.12"]
+airflow = ["apache-airflow>=2.9"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.5", "httpx>=0.27"]
+
+[project.scripts]
+finlam-prod = "finlam_prod.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finlam_prod"]
+
+[tool.ruff]
+line-length = 99
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "D"]
+ignore = ["D203", "D213", "D107", "D401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+"src/finlam_prod/cli.py" = ["B008"]
+"dags/*" = ["D", "E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
